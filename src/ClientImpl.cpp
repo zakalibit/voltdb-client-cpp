@@ -451,7 +451,7 @@ ClientImpl::ClientImpl(ClientConfig config) throw (Exception, LibEventException,
         m_clusterStartTime(-1), m_username(config.m_username), m_passwordHash(NULL), m_maxOutstandingRequests(config.m_maxOutstandingRequests),
         m_ignoreBackpressure(false), m_useClientAffinity(true),m_updateHashinator(false), m_enableAbandon(config.m_enableAbandon), m_pendingConnectionSize(0),
         m_enableQueryTimeout(config.m_enableQueryTimeout), m_queryTimeoutMonitorThread(0), m_timerMonitorBase(NULL), m_timerMonitorEventPtr(NULL),
-        m_timeoutServiceEventPtr(NULL), m_timerMonitorEventInitialized(false), m_timedoutRequests(0), m_responseHandleNotFound(0),
+        m_timeoutServiceEventPtr(NULL), m_timedoutRequests(0), m_responseHandleNotFound(0),
         m_queryExpirationTime(config.m_queryTimeout), m_scanIntervalForTimedoutQuery(config.m_scanIntervalForTimedoutQuery),
         m_pLogger(0), m_hashScheme(config.m_hashScheme), m_enableSSL(config.m_useSSL), m_clientSslCtx(NULL) {
     pthread_once(&once_initLibevent, initLibevent);
@@ -481,8 +481,8 @@ ClientImpl::ClientImpl(ClientConfig config) throw (Exception, LibEventException,
             throw LibEventException("Failed to create and initialize event base for query-timeout monitor");
         }
     }
-    m_timerCheckPipe[0] = -1;
-    m_timerCheckPipe[1] = -1;
+
+    setUpTimeoutCheckerMonitor();
 
     {
         // Initialize the OpenSSL resources that needs to initialized only once for the process.
@@ -718,20 +718,6 @@ void ClientImpl::finalizeAuthentication(PendingConnection* pc) throw (Exception,
                 logMessage(ClientLogger::ERROR, ss.str());
             }
         }
-
-        // set up timer thread if query timeout is enabled
-        if (m_timerMonitorEventInitialized == false && m_enableQueryTimeout) {
-            assert(m_timerCheckPipe[0] == -1);
-            assert(m_timerCheckPipe[1] == -1);
-
-            if (pipe(m_timerCheckPipe) == 0) {
-                setUpTimeoutCheckerMonitor();
-                m_timerMonitorEventInitialized = true;
-            }
-            else {
-                throw PipeCreationException();
-            }
-        }
     }
     else {
         logMessage(ClientLogger::DEBUG, "ClientImpl::finalizeAuthentication Fail");
@@ -942,19 +928,22 @@ void ClientImpl::purgeExpiredRequests() {
             dummyTable);
 
     for (BEVToCallbackMap::iterator itr = m_callbacks.begin(); itr != end; ++itr) {
-        boost::shared_ptr<CallbackMap> callbackMap = itr->second;
-        for (CallbackMap::iterator cbItr =  callbackMap->begin();
-                cbItr != callbackMap->end(); ++cbItr) {
-            timeval expirationTime = cbItr->second->getExpirationTime();
+        const boost::shared_ptr<CallbackMap>& callbackMap = itr->second;
+	CallbackMap::iterator cbItr =  callbackMap->begin();
+        for(;cbItr != callbackMap->end(); ++cbItr) {
+	    const boost::shared_ptr<CallBackBookeeping>& cbb = cbItr->second;
 
-            if (cbItr->second->isReadOnly() && (!timercmp(&expirationTime, &now, >))) {
+            if (!cbb->isReadOnly()) continue;
+
+	    timeval expirationTime = cbb->getExpirationTime();
+	    if (!timercmp(&expirationTime, &now, >)) {
                 response.setClientData(cbItr->first);
                 try {
-                    cbItr->second->getCallback()->callback(response);
+                    cbb->getCallback()->callback(response);
                 } catch (std::exception &excp) {
-                    if (m_listener.get() != NULL) {
+                    if (m_listener) {
                         try {
-                            m_listener->uncaughtException(excp, cbItr->second->getCallback(), response);
+                            m_listener->uncaughtException(excp, cbb->getCallback(), response);
                         } catch (const std::exception &e) {
                             std::string str ("Uncaught exception");
                             logMessage(ClientLogger::ERROR, str + e.what());

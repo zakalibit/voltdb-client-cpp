@@ -280,19 +280,12 @@ private:
     // Enabling of query timeout is deduced from client config and can't be toggled on fly
     const bool m_enableQueryTimeout;
     pthread_t m_queryTimeoutMonitorThread;
-    // base for monitor thread
-    struct event_base *m_timerMonitorBase;
-    // monitor event ptr, registered with monitor base. Monitor event triggers event
-    // to main base to scan outstanding requests if they have expired
-    struct event *m_timerMonitorEventPtr;
     // event ptr, registered with main base, listens for requests to perform scans
     // on pending requests. If any wait time of pending requests has exceed expiration
     // time, requests is timedout by sending timeout response to client and pending request
     // dropped from the pending callback list
     struct event *m_timeoutServiceEventPtr;
     // pipe to trigger events from monitor thread to main thread
-    int m_timerCheckPipe[2];
-    bool m_timerMonitorEventInitialized;
     struct timeval m_queryExpirationTime;
     struct timeval m_scanIntervalForTimedoutQuery;
 
